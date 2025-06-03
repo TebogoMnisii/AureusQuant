@@ -28,20 +28,32 @@ import secrets
 import re
 import plotly.express as px
 from wordcloud import WordCloud
+from binance.exceptions import BinanceAPIException
 # Apply nest_asyncio for async in Streamlit
 nest_asyncio.apply()
 
 # Get environment variables (will be set in Streamlit Cloud)
 API_KEY = os.environ.get("TWELVE_DATA_API_KEY", "010b5dc49d784e548e99c2f6da02a266")
-BINANCE_API_KEY = os.environ.get("BINANCE_API_KEY", "QhZbUZLk84RU4T6sCqgzHmWjyrLqwdxaV40TokxKVZuZXEUfxfi2aeKDBvBkll8U")
-BINANCE_SECRET_KEY = os.environ.get("BINANCE_SECRET_KEY", "pobmPuSnJeLVrZmruHQ6yu1f4HcD8HVO1wUoR1tVSIGLnUInmKYbuKgbcupsk2Vr")
+BINANCE_API_KEY = os.environ.get("BINANCE_API_KEY")
+BINANCE_SECRET_KEY = os.environ.get("BINANCE_SECRET_KEY")
 EMAIL_USER = os.environ.get("EMAIL_USER", "your_email@example.com")
 EMAIL_PASSWORD = os.environ.get("EMAIL_PASSWORD", "your_email_password")
 
 # Initialize Binance client
-binance_client = None
-if BINANCE_API_KEY and BINANCE_SECRET_KEY:
-    binance_client = Client(BINANCE_API_KEY, BINANCE_SECRET_KEY)
+bbinance_client = None
+try:
+    if BINANCE_API_KEY and BINANCE_SECRET_KEY:
+        binance_client = Client(
+            api_key=BINANCE_API_KEY.strip(), 
+            api_secret=BINANCE_SECRET_KEY.strip()
+        )
+        st.toast("Binance client initialized successfully!", icon="✅")
+except BinanceAPIException as e:
+    st.error(f"Binance API Error: {e.message}")
+    binance_client = None
+except Exception as e:
+    st.error(f"Error initializing Binance: {str(e)}")
+    binance_client = None
 
 # Database connection pooling
 db_lock = threading.Lock()
@@ -321,8 +333,10 @@ def login():
 # ---------------- BINANCE FUNCTIONS ----------------
 def get_binance_data(symbol, interval, days):
     try:
+        # Check if client is initialized
         if not binance_client:
-            st.error("Binance API credentials not configured")
+            st.error("⚠️ Binance API credentials not configured")
+            log_event(st.session_state["username"], "binance_error", {"error": "Client not initialized"})
             return None
 
         # Map interval to Binance format
@@ -334,26 +348,54 @@ def get_binance_data(symbol, interval, days):
             "1h": Client.KLINE_INTERVAL_1HOUR,
             "1day": Client.KLINE_INTERVAL_1DAY
         }
-        binance_interval = interval_map.get(interval, Client.KLINE_INTERVAL_1DAY)
+        
+        if interval not in interval_map:
+            st.warning(f"Unsupported interval: {interval}. Using 1 day as default")
+            binance_interval = Client.KLINE_INTERVAL_1DAY
+        else:
+            binance_interval = interval_map[interval]
         
         # Calculate start and end times
         end_time = datetime.now()
         start_time = end_time - timedelta(days=days)
         
-        # Fetch klines
-        klines = binance_client.get_historical_klines(
-            symbol=symbol,
-            interval=binance_interval,
-            start_str=start_time.strftime("%d %b %Y %H:%M:%S"),
-            end_str=end_time.strftime("%d %b %Y %H:%M:%S")
-        )
-        
-        # Convert to DataFrame
-        df = pd.DataFrame(klines, columns=[
+        # Fetch klines with retry logic
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                klines = binance_client.get_historical_klines(
+                    symbol=symbol,
+                    interval=binance_interval,
+                    start_str=start_time.strftime("%d %b %Y %H:%M:%S"),
+                    end_str=end_time.strftime("%d %b %Y %H:%M:%S")
+                )
+                break  # Exit loop if successful
+            except BinanceAPIException as api_ex:
+                if api_ex.code == -1003:  # Rate limit exceeded
+                    wait_time = 2 ** attempt  # Exponential backoff
+                    st.warning(f"Rate limit exceeded. Retrying in {wait_time} seconds...")
+                    time.sleep(wait_time)
+                else:
+                    raise
+            except (ConnectionError, TimeoutError):
+                st.warning(f"Network error. Retry {attempt+1}/{max_retries}")
+                time.sleep(1)
+        else:
+            st.error("Failed to fetch data after multiple attempts")
+            return None
+
+        # Validate response
+        if not klines:
+            st.warning(f"No data returned for {symbol}. Check symbol format.")
+            return None
+            
+        # Create DataFrame
+        columns = [
             'timestamp', 'open', 'high', 'low', 'close', 'volume',
             'close_time', 'quote_asset_volume', 'num_trades',
             'taker_buy_base', 'taker_buy_quote', 'ignore'
-        ])
+        ]
+        df = pd.DataFrame(klines, columns=columns)
         
         # Convert columns to numeric
         numeric_cols = ['open', 'high', 'low', 'close', 'volume']
@@ -363,14 +405,39 @@ def get_binance_data(symbol, interval, days):
         df['datetime'] = pd.to_datetime(df['timestamp'], unit='ms')
         df.set_index('datetime', inplace=True)
         
-        # Keep only necessary columns
-        df = df[['open', 'high', 'low', 'close', 'volume']]
+        # Filter and return
+        return df[['open', 'high', 'low', 'close', 'volume']]
         
-        return df
-    except Exception as e:
-        st.error(f"Binance API error: {str(e)}")
+    except BinanceAPIException as e:
+        # Handle specific Binance errors
+        error_msg = f"Binance API error ({e.status_code}): "
+        if e.code == -1121:
+            error_msg += f"Invalid symbol: {symbol}"
+        elif e.code == -1100:
+            error_msg += "Illegal characters in parameter"
+        elif e.code == -1021:
+            error_msg += "Timestamp error - check system clock"
+        elif e.code == -1003:
+            error_msg += "Rate limit exceeded - try again later"
+        else:
+            error_msg += f"Code {e.code}: {e.message}"
+            
+        st.error(error_msg)
+        log_event(st.session_state["username"], "binance_api_error", {
+            "symbol": symbol,
+            "code": e.code,
+            "message": e.message
+        })
         return None
-
+        
+    except Exception as e:
+        # Handle all other exceptions
+        st.error(f"Unexpected error fetching Binance data: {str(e)}")
+        log_event(st.session_state["username"], "binance_generic_error", {
+            "symbol": symbol,
+            "error": str(e)
+        })
+        return None
 # ---------------- REAL-TIME DATA STREAMING ----------------
 async def binance_real_time(symbol, interval):
     client = await AsyncClient.create()
