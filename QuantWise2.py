@@ -456,7 +456,7 @@ def get_binance_data(symbol, interval, days):
         })
         return None
 # ---------------- REAL-TIME DATA STREAMING ----------------
-sync def binance_real_time(symbol, interval):
+async def binance_real_time(symbol, interval):
     try:
         # Determine which TLD to use based on our synchronous client
         tld = 'us' if hasattr(binance_client, 'tld') and binance_client.tld == 'us' else 'com'
