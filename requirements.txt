@@ -1,0 +1,16 @@
+streamlit
+yfinance
+requests
+pandas
+numpy
+plotly
+scipy
+arch
+python-dotenv
+bcrypt
+websockets
+binance-connector
+nest_asyncio
+cvxpy
+wordcloud
+scikit-learn
