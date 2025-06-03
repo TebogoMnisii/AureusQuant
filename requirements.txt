@@ -5,6 +5,7 @@ pandas
 numpy
 plotly
 scipy
+python-binance
 arch
 python-dotenv
 bcrypt
