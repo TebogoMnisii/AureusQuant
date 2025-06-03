@@ -36,25 +36,42 @@ nest_asyncio.apply()
 API_KEY = os.environ.get("TWELVE_DATA_API_KEY", "010b5dc49d784e548e99c2f6da02a266")
 BINANCE_API_KEY = os.environ.get("BINANCE_API_KEY")
 BINANCE_SECRET_KEY = os.environ.get("BINANCE_SECRET_KEY")
+binance_client = None
+BINANCE_TLD = 'us'  # Default to Binance US
 EMAIL_USER = os.environ.get("EMAIL_USER", "your_email@example.com")
 EMAIL_PASSWORD = os.environ.get("EMAIL_PASSWORD", "your_email_password")
 
 # Initialize Binance client
-bbinance_client = None
-try:
-    if BINANCE_API_KEY and BINANCE_SECRET_KEY:
+if BINANCE_API_KEY and BINANCE_SECRET_KEY:
+    try:
+        # First try global Binance (non-US)
         binance_client = Client(
-            api_key=BINANCE_API_KEY.strip(), 
-            api_secret=BINANCE_SECRET_KEY.strip()
+            api_key=BINANCE_API_KEY.strip(),
+            api_secret=BINANCE_SECRET_KEY.strip(),
+            tld='com'  # Use global endpoint
         )
-        st.toast("Binance client initialized successfully!", icon="✅")
-except BinanceAPIException as e:
-    st.error(f"Binance API Error: {e.message}")
-    binance_client = None
-except Exception as e:
-    st.error(f"Error initializing Binance: {str(e)}")
-    binance_client = None
-
+        binance_client.get_symbol_info('BTCUSDT')  # Test API
+        st.toast("Connected to Binance Global API", icon="🌎")
+    except BinanceAPIException as e:
+        if "restricted location" in str(e).lower():
+            try:
+                # Fall back to Binance US
+                binance_client = Client(
+                    api_key=BINANCE_API_KEY.strip(),
+                    api_secret=BINANCE_SECRET_KEY.strip(),
+                    tld='us'  # US-specific endpoint
+                )
+                binance_client.ping()
+                st.toast("Connected to Binance US API", icon="🇺🇸")
+            except BinanceAPIException as e2:
+                st.error(f"Binance US API Error: {e2.message}")
+                binance_client = None
+        else:
+            st.error(f"Binance Global API Error: {e.message}")
+            binance_client = None
+    except Exception as e:
+        st.error(f"Error initializing Binance: {str(e)}")
+        binance_client = None
 # Database connection pooling
 db_lock = threading.Lock()
 
@@ -439,96 +456,149 @@ def get_binance_data(symbol, interval, days):
         })
         return None
 # ---------------- REAL-TIME DATA STREAMING ----------------
-async def binance_real_time(symbol, interval):
-    client = await AsyncClient.create()
-    bm = BinanceSocketManager(client)
-    
-    # Map interval to Binance format
-    interval_map = {
-        "1min": Client.KLINE_INTERVAL_1MINUTE,
-        "5min": Client.KLINE_INTERVAL_5MINUTE,
-        "15min": Client.KLINE_INTERVAL_15MINUTE,
-        "30min": Client.KLINE_INTERVAL_30MINUTE,
-        "1h": Client.KLINE_INTERVAL_1HOUR,
-        "1day": Client.KLINE_INTERVAL_1DAY
-    }
-    binance_interval = interval_map.get(interval, Client.KLINE_INTERVAL_1MINUTE)
-    
-    # start any sockets here, i.e., a trade socket
-    ts = bm.kline_socket(symbol, interval=binance_interval)
-    
-    # Then start receiving messages
-    async with ts as tscm:
-        while st.session_state.real_time_active:
-            res = await tscm.recv()
-            kline = res['k']
-            new_data = pd.DataFrame([{
-                'datetime': pd.to_datetime(kline['t'], unit='ms'),
-                'open': float(kline['o']),
-                'high': float(kline['h']),
-                'low': float(kline['l']),
-                'close': float(kline['c']),
-                'volume': float(kline['v'])
-            }]).set_index('datetime')
-            
-            # Update session state
-            if st.session_state.real_time_data.empty:
-                st.session_state.real_time_data = new_data
-            else:
-                st.session_state.real_time_data = pd.concat([st.session_state.real_time_data, new_data])
-            
-            # Throttle updates
-            await asyncio.sleep(0.5)
-    
-    await client.close_connection()
-
-def start_real_time(symbol, interval, is_crypto):
-    st.session_state.real_time_active = True
-    st.session_state.real_time_data = pd.DataFrame()
-    
-    if is_crypto:
-        # Start the async task for crypto
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        loop.run_until_complete(binance_real_time(symbol, interval))
-    else:
-        # For stocks, use a thread to periodically fetch data
-        def stock_poller():
-            while st.session_state.real_time_active:
-                try:
-                    # Use yfinance for real-time stock data (delayed by 15 mins)
-                    yf_interval_map = {
-                        "1min": "1m", "5min": "5m", "15min": "15m", 
-                        "30min": "30m", "1h": "60m", "1day": "1d"
-                    }
-                    yf_interval = yf_interval_map.get(interval, "1m")
-                    
-                    # Get data for the current day
-                    data = yf.download(symbol, period='1d', interval=yf_interval, progress=False)
-                    if not data.empty:
-                        # Get the last data point
-                        latest = data.iloc[-1]
-                        # Create a new row in the same format as crypto data
-                        new_row = pd.DataFrame({
-                            'open': latest['Open'],
-                            'high': latest['High'],
-                            'low': latest['Low'],
-                            'close': latest['Close'],
-                            'volume': latest['Volume']
-                        }, index=[data.index[-1]])
-                        
-                        # Append to session state if it's new data
-                        if st.session_state.real_time_data.empty:
-                            st.session_state.real_time_data = new_row
-                        else:
-                            if new_row.index[0] > st.session_state.real_time_data.index.max():
-                                st.session_state.real_time_data = pd.concat([st.session_state.real_time_data, new_row])
-                except Exception as e:
-                    st.error(f"Error fetching stock data: {str(e)}")
-                time.sleep(10)  # Update every 10 seconds
+sync def binance_real_time(symbol, interval):
+    try:
+        # Determine which TLD to use based on our synchronous client
+        tld = 'us' if hasattr(binance_client, 'tld') and binance_client.tld == 'us' else 'com'
         
-        # Start the thread
-        threading.Thread(target=stock_poller, daemon=True).start()
+        # Create async client with proper TLD
+        client = await AsyncClient.create(
+            api_key=BINANCE_API_KEY.strip(),
+            api_secret=BINANCE_SECRET_KEY.strip(),
+            tld=tld
+        )
+        
+        bm = BinanceSocketManager(client)
+        
+        # Map interval to Binance format
+        interval_map = {
+            "1min": Client.KLINE_INTERVAL_1MINUTE,
+            "5min": Client.KLINE_INTERVAL_5MINUTE,
+            "15min": Client.KLINE_INTERVAL_15MINUTE,
+            "30min": Client.KLINE_INTERVAL_30MINUTE,
+            "1h": Client.KLINE_INTERVAL_1HOUR,
+            "1day": Client.KLINE_INTERVAL_1DAY
+        }
+        binance_interval = interval_map.get(interval, Client.KLINE_INTERVAL_1MINUTE)
+        
+        # Start kline socket
+        ts = bm.kline_socket(symbol, interval=binance_interval)
+        
+        # Then start receiving messages
+        async with ts as tscm:
+            while st.session_state.real_time_active:
+                res = await tscm.recv()
+                if 'k' in res:
+                    kline = res['k']
+                    new_data = pd.DataFrame([{
+                        'datetime': pd.to_datetime(kline['t'], unit='ms'),
+                        'open': float(kline['o']),
+                        'high': float(kline['h']),
+                        'low': float(kline['l']),
+                        'close': float(kline['c']),
+                        'volume': float(kline['v'])
+                    }]).set_index('datetime')
+                    
+                    # Update session state
+                    if st.session_state.real_time_data.empty:
+                        st.session_state.real_time_data = new_data
+                    else:
+                        # Only add if it's new data
+                        if new_data.index[0] > st.session_state.real_time_data.index.max():
+                            st.session_state.real_time_data = pd.concat([
+                                st.session_state.real_time_data, 
+                                new_data
+                            ])
+                    
+                    # Throttle updates to prevent UI overload
+                    await asyncio.sleep(0.2)
+                else:
+                    st.warning(f"Unexpected real-time data format: {res}")
+    
+    except websockets.exceptions.ConnectionClosedError:
+        st.error("Real-time connection closed unexpectedly")
+    except asyncio.TimeoutError:
+        st.error("Real-time connection timed out")
+    except BinanceAPIException as e:
+        if "restricted location" in str(e).lower():
+            st.error("Binance API blocked: This location is restricted. Try Binance US instead.")
+        else:
+            st.error(f"Binance API error: {e.message}")
+    except Exception as e:
+        st.error(f"Unexpected error in real-time stream: {str(e)}")
+    finally:
+        try:
+            await client.close_connection()
+        except:
+            pass
+def start_real_time(symbol, interval, is_crypto):
+    try:
+        # Reset real-time data
+        st.session_state.real_time_active = True
+        st.session_state.real_time_data = pd.DataFrame()
+        
+        if is_crypto:
+            # Determine TLD based on binance_client configuration
+            tld = 'us'
+            if binance_client and hasattr(binance_client, 'tld'):
+                tld = binance_client.tld
+            elif binance_client and 'us' in str(binance_client).lower():
+                tld = 'us'
+            else:
+                tld = 'com'
+                
+            # Start the async task for crypto
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            loop.run_until_complete(binance_real_time(symbol, interval, tld))
+        else:
+            # For stocks, use a thread to periodically fetch data
+            def stock_poller():
+                yf_interval_map = {
+                    "1min": "1m", "5min": "5m", "15min": "15m", 
+                    "30min": "30m", "1h": "60m"
+                }
+                yf_interval = yf_interval_map.get(interval, "1m")
+                
+                while st.session_state.real_time_active:
+                    try:
+                        # Get data for the current day
+                        data = yf.download(symbol, period='1d', interval=yf_interval, progress=False)
+                        if not data.empty:
+                            # Get the last data point
+                            latest = data.iloc[-1]
+                            
+                            # Create new row with proper datetime index
+                            new_row = pd.DataFrame({
+                                'open': [latest['Open']],
+                                'high': [latest['High']],
+                                'low': [latest['Low']],
+                                'close': [latest['Close']],
+                                'volume': [latest['Volume']]
+                            }, index=[data.index[-1]])
+                            
+                            # Append only if it's new data
+                            if st.session_state.real_time_data.empty:
+                                st.session_state.real_time_data = new_row
+                            else:
+                                last_index = st.session_state.real_time_data.index.max()
+                                if pd.to_datetime(new_row.index[0]) > last_index:
+                                    st.session_state.real_time_data = pd.concat([
+                                        st.session_state.real_time_data, 
+                                        new_row
+                                    ])
+                    except Exception as e:
+                        st.error(f"Stock data error: {str(e)}")
+                    
+                    # Update every 10 seconds
+                    time.sleep(10)
+            
+            # Start the thread
+            threading.Thread(target=stock_poller, daemon=True).start()
+            
+    except Exception as e:
+        st.error(f"Failed to start real-time: {str(e)}")
+        st.session_state.real_time_active = False
 
 # ---------------- ASSET DATA FETCHER ----------------
 @lru_cache(maxsize=32)
