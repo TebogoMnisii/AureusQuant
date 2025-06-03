@@ -607,11 +607,14 @@ def cached_asset_data(symbol, interval, days, is_crypto):
 
 def get_asset_data(symbol, interval, days, is_crypto, retries=3):
     if is_crypto:
-        return get_binance_data(symbol, interval, days)
-    else:
-        # Use a valid default API key if environment variable is not set
-        api_key = API_KEY if API_KEY != "your_default_api_key" else "010b5dc49d784e548e99c2f6da02a266"
+        # First try Binance
+        binance_data = get_binance_data(symbol, interval, days)
+        if binance_data is not None:
+            return binance_data
         
+        # If Binance fails, fallback to Twelve Data
+        st.warning("Binance failed, using Twelve Data as fallback")
+        is_crypto = False  # Treat as stock data
         for attempt in range(retries):
             try:
                 end_date = datetime.now()
@@ -1673,3 +1676,27 @@ with tab5:
             st.info("No feedback submitted yet")
         
         conn.close()
+
+st.subheader("API Status")
+    
+    # Binance status
+    if binance_client:
+        try:
+            status = binance_client.get_system_status()
+            st.success(f"Binance API: Operational (TLD: {BINANCE_TLD})")
+            st.write(f"Binance Key: {BINANCE_API_KEY[:5]}...{BINANCE_API_KEY[-5:]}")
+        except:
+            st.error("Binance API: Connection failed")
+    else:
+        st.warning("Binance API: Not configured")
+    
+    # Twelve Data status
+    try:
+        test_url = f"https://api.twelvedata.com/time_series?symbol=AAPL&interval=1day&apikey={API_KEY}"
+        response = requests.get(test_url)
+        if response.status_code == 200:
+            st.success("Twelve Data API: Operational")
+        else:
+            st.warning(f"Twelve Data API: Response {response.status_code}")
+    except:
+        st.error("Twelve Data API: Connection failed")
