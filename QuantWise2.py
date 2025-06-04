@@ -607,12 +607,12 @@ def cached_asset_data(symbol, interval, days, is_crypto):
 
 def get_asset_data(symbol, interval, days, is_crypto, retries=3):
     if is_crypto:
-        # FIRST TRY TWELVE DATA FOR CRYPTO
+        # Only use Twelve Data for cryptocurrency
         for attempt in range(retries):
             try:
                 # Convert symbol to Twelve Data format (BTC/USD instead of BTCUSDT)
                 if "/" not in symbol:
-                    # Try to auto-convert common formats
+                    # Auto-convert common formats
                     if symbol.endswith("USDT"):
                         converted_symbol = f"{symbol[:-4]}/USD"
                     elif symbol.endswith("USD"):
@@ -630,35 +630,47 @@ def get_asset_data(symbol, interval, days, is_crypto, retries=3):
                 response = requests.get(url)
                 data = response.json()
                 
+                # Check for API errors
+                if "code" in data and data["code"] != 200:
+                    error_msg = data.get("message", "Unknown error")
+                    st.warning(f"Twelve Data API error: {error_msg}")
+                    continue
+                
                 if "values" in data:
                     df = pd.DataFrame(data["values"])
-                    df["datetime"] = pd.to_datetime(df["datetime"])
-                    df.set_index("datetime", inplace=True)
+                    # Handle possible date column names
+                    date_col = "datetime" if "datetime" in df.columns else "date"
+                    df[date_col] = pd.to_datetime(df[date_col])
+                    df.set_index(date_col, inplace=True)
                     df = df.astype(float).sort_index()
-                    # Rename columns to match expected format
-                    df = df.rename(columns={
+                    
+                    # Standardize column names
+                    column_map = {
                         "open": "open",
                         "high": "high",
                         "low": "low",
                         "close": "close",
                         "volume": "volume"
-                    })
+                    }
+                    df = df.rename(columns=column_map)
+                    
+                    # Ensure we have required columns
+                    for col in ["open", "high", "low", "close"]:
+                        if col not in df.columns:
+                            df[col] = df["close"]
+                            
+                    if "volume" not in df.columns:
+                        df["volume"] = 0
+                    
                     return df
                 else:
-                    st.warning(f"Twelve Data attempt {attempt+1} failed: {data.get('message', 'Unknown error')}")
-                    time.sleep(2)
+                    st.warning(f"Twelve Data returned no values: {data}")
             except Exception as e:
-                st.warning(f"Twelve Data attempt {attempt+1} failed: {str(e)}")
+                st.warning(f"Attempt {attempt+1} failed: {str(e)}")
                 time.sleep(2)
         
-        # If Twelve Data fails, fall back to Binance
-        st.warning("Twelve Data failed, using Binance as fallback")
-        binance_data = get_binance_data(symbol, interval, days)
-        if binance_data is not None:
-            return binance_data
-        
-        # If Binance fails too, try Yahoo Finance
-        st.warning("Binance failed, using Yahoo Finance as fallback")
+        # If all attempts fail, use Yahoo Finance as fallback
+        st.warning("Twelve Data failed, using Yahoo Finance as fallback")
         try:
             interval_map = {
                 "1min": "1m", "5min": "5m", "15min": "15m", 
@@ -668,7 +680,7 @@ def get_asset_data(symbol, interval, days, is_crypto, retries=3):
             yf_data = yf.download(symbol, period=f"{days+5}d", interval=yf_interval)
             
             if not yf_data.empty:
-                # Create all required columns with default values if missing
+                # Create required columns
                 required_columns = ['Open', 'High', 'Low', 'Close', 'Volume']
                 for col in required_columns:
                     if col not in yf_data.columns:
