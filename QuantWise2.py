@@ -607,19 +607,26 @@ def cached_asset_data(symbol, interval, days, is_crypto):
 
 def get_asset_data(symbol, interval, days, is_crypto, retries=3):
     if is_crypto:
-        # First try Binance
-        binance_data = get_binance_data(symbol, interval, days)
-        if binance_data is not None:
-            return binance_data
-        
-        # If Binance fails, fallback to Twelve Data
-        st.warning("Binance failed, using Twelve Data as fallback")
-        is_crypto = False  # Treat as stock data
+        # FIRST TRY TWELVE DATA FOR CRYPTO
         for attempt in range(retries):
             try:
+                # Convert symbol to Twelve Data format (BTC/USD instead of BTCUSDT)
+                if "/" not in symbol:
+                    # Try to auto-convert common formats
+                    if symbol.endswith("USDT"):
+                        converted_symbol = f"{symbol[:-4]}/USD"
+                    elif symbol.endswith("USD"):
+                        converted_symbol = f"{symbol[:-3]}/USD"
+                    else:
+                        converted_symbol = symbol + "/USD"
+                else:
+                    converted_symbol = symbol
+                
                 end_date = datetime.now()
                 start_date = end_date - timedelta(days=days)
-                url = f"https://api.twelvedata.com/time_series?symbol={symbol}&interval={interval}&start_date={start_date.strftime('%Y-%m-%d')}&end_date={end_date.strftime('%Y-%m-%d')}&apikey={api_key}&outputsize=5000"
+                url = f"https://api.twelvedata.com/time_series?symbol={converted_symbol}&interval={interval}&start_date={start_date.strftime('%Y-%m-%d')}&end_date={end_date.strftime('%Y-%m-%d')}&apikey={API_KEY}&outputsize=5000"
+                
+                st.info(f"Fetching crypto data from Twelve Data: {converted_symbol}")
                 response = requests.get(url)
                 data = response.json()
                 
@@ -628,24 +635,36 @@ def get_asset_data(symbol, interval, days, is_crypto, retries=3):
                     df["datetime"] = pd.to_datetime(df["datetime"])
                     df.set_index("datetime", inplace=True)
                     df = df.astype(float).sort_index()
+                    # Rename columns to match expected format
+                    df = df.rename(columns={
+                        "open": "open",
+                        "high": "high",
+                        "low": "low",
+                        "close": "close",
+                        "volume": "volume"
+                    })
                     return df
                 else:
-                    st.warning(f"Attempt {attempt+1} failed: {data.get('message', 'Unknown error')}")
+                    st.warning(f"Twelve Data attempt {attempt+1} failed: {data.get('message', 'Unknown error')}")
                     time.sleep(2)
             except Exception as e:
-                st.warning(f"Attempt {attempt+1} failed: {str(e)}")
+                st.warning(f"Twelve Data attempt {attempt+1} failed: {str(e)}")
                 time.sleep(2)
         
-        # Fallback to Yahoo Finance with proper column handling
+        # If Twelve Data fails, fall back to Binance
+        st.warning("Twelve Data failed, using Binance as fallback")
+        binance_data = get_binance_data(symbol, interval, days)
+        if binance_data is not None:
+            return binance_data
+        
+        # If Binance fails too, try Yahoo Finance
+        st.warning("Binance failed, using Yahoo Finance as fallback")
         try:
-            st.warning("Using Yahoo Finance as fallback data source")
             interval_map = {
                 "1min": "1m", "5min": "5m", "15min": "15m", 
                 "30min": "30m", "1h": "60m", "1day": "1d"
             }
             yf_interval = interval_map.get(interval, "1d")
-            
-            # Get more days to ensure we have enough data points
             yf_data = yf.download(symbol, period=f"{days+5}d", interval=yf_interval)
             
             if not yf_data.empty:
