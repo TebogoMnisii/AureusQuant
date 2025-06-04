@@ -1,8 +1,8 @@
-# ⚡ QuantWise
+# ⚡ AureusQuant
 
-**QuantWise** is an institutional-grade analytics and risk modeling platform designed for both retail investors and fintech builders. It integrates portfolio optimization, backtesting engines, technical indicators, and real-time crypto trading data in one cloud-native, GPU-accelerated environment.
+**AureusQuant** is an institutional-grade analytics and risk modeling platform designed for both retail investors and fintech builders. It integrates portfolio optimization, backtesting engines, technical indicators, and real-time crypto trading data in one cloud-native, GPU-accelerated environment.
 
-Live App: [quantwise.streamlit.app](https://quantwise.streamlit.app)
+Live App: [quantwise.streamlit.app]((https://aureusquant.streamlit.app/))
 
 ---
 
