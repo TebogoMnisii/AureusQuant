@@ -1573,7 +1573,7 @@ with tab4:
         # Symbol input
         if is_crypto:
             symbol = st.selectbox("Cryptocurrency Pair", 
-                               ["BTCUSDT", "ETHUSDT", "BNBUSDT", "XRPUSDT", "SOLUSDT"],
+                               ["BTC/USD", "ETH/USD", "BNB/USD", "XRP/USD", "SOL/USD"],
                                index=0, key="rt_crypto_symbol")
         else:
             symbol = st.text_input("Stock Symbol (e.g. AAPL)", value="AAPL", key="rt_stock_symbol").upper()
@@ -1586,7 +1586,14 @@ with tab4:
         
         # Real-time controls
         if st.button("▶️ Start Real-Time Stream") and not st.session_state.real_time_active:
-            start_real_time(symbol, rt_interval, is_crypto)
+            # For crypto, we'll use simulated real-time since Twelve Data doesn't offer WebSockets
+            if is_crypto:
+                st.session_state.real_time_active = True
+                st.session_state.real_time_data = get_asset_data(symbol.split("/")[0] + "USD", "1min", 1, True).tail(30)
+                st.info("Using simulated real-time for crypto (refresh every 10s)")
+            else:
+                # For stocks, use the existing method
+                start_real_time(symbol, rt_interval, is_crypto)
             log_event(st.session_state["username"], "realtime_start", {"symbol": symbol})
             
         if st.button("⏹️ Stop Real-Time Stream") and st.session_state.real_time_active:
@@ -1620,19 +1627,33 @@ with tab4:
                          xaxis_title="Time",
                          yaxis_title="Price (USD)")
         st.plotly_chart(fig, use_container_width=True)
+        
+        # Simulate real-time updates for crypto
+        if is_crypto and st.session_state.real_time_active:
+            time.sleep(10)
+            new_data = get_asset_data(symbol.split("/")[0] + "USD", "1min", 1, True).tail(1)
+            if not new_data.empty:
+                st.session_state.real_time_data = pd.concat([
+                    st.session_state.real_time_data, 
+                    new_data
+                ]).tail(30)  # Keep only last 30 data points
+                st.rerun()
     
     # Historical crypto analysis
     st.subheader("Cryptocurrency Historical Analysis")
     crypto_symbol_hist = st.selectbox("Select Cryptocurrency", 
-                                    ["BTCUSDT", "ETHUSDT", "BNBUSDT", "XRPUSDT", "SOLUSDT"],
+                                    ["BTC/USD", "ETH/USD", "BNB/USD", "XRP/USD", "SOL/USD"],
                                     index=0,
                                     key="crypto_hist")
     crypto_days = st.slider("Days of Data", min_value=1, max_value=365, value=30, key="crypto_days")
+    crypto_interval = st.selectbox("Data Interval", ["1day", "1h", "30min"], index=0, key="crypto_interval")
     
     if st.button("Analyze Cryptocurrency", key="analyze_crypto"):
         with st.spinner("Fetching cryptocurrency data..."):
-            df_crypto = get_binance_data(crypto_symbol_hist, "1day", crypto_days)
+            # Use our new get_asset_data function with Twelve Data
+            df_crypto = get_asset_data(crypto_symbol_hist, crypto_interval, crypto_days, True)
             if df_crypto is not None and not df_crypto.empty:
+                # Add technical indicators
                 df_crypto = add_technical_indicators(df_crypto, 10, 50, 14, 20, 2)
                 log_event(st.session_state["username"], "crypto_analysis", {"symbol": crypto_symbol_hist})
                 
@@ -1670,7 +1691,7 @@ with tab4:
                 st.metric("Daily Volatility", f"{daily_vol*100:.2f}%")
                 st.metric("Annualized Volatility", f"{annual_vol*100:.2f}%")
             else:
-                st.error("Failed to fetch cryptocurrency data")
+                st.error("Failed to fetch cryptocurrency data. Please try again later.")
 
 # ----------------- TAB 5: ACCOUNT MANAGEMENT -----------------
 with tab5:
