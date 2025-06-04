@@ -1783,6 +1783,6 @@ with tab5:
         
         conn.close()
 
-st.subheader("API Status")
+
     
     
