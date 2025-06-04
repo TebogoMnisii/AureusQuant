@@ -1764,24 +1764,4 @@ with tab5:
 
 st.subheader("API Status")
     
-    # Binance status
-    if binance_client:
-        try:
-            status = binance_client.get_system_status()
-            st.success(f"Binance API: Operational (TLD: {BINANCE_TLD})")
-            st.write(f"Binance Key: {BINANCE_API_KEY[:5]}...{BINANCE_API_KEY[-5:]}")
-        except:
-            st.error("Binance API: Connection failed")
-    else:
-        st.warning("Binance API: Not configured")
     
-    # Twelve Data status
-    try:
-        test_url = f"https://api.twelvedata.com/time_series?symbol=AAPL&interval=1day&apikey={API_KEY}"
-        response = requests.get(test_url)
-        if response.status_code == 200:
-            st.success("Twelve Data API: Operational")
-        else:
-            st.warning(f"Twelve Data API: Response {response.status_code}")
-    except:
-        st.error("Twelve Data API: Connection failed")
