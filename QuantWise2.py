@@ -626,7 +626,6 @@ def get_asset_data(symbol, interval, days, is_crypto, retries=3):
                 start_date = end_date - timedelta(days=days)
                 url = f"https://api.twelvedata.com/time_series?symbol={converted_symbol}&interval={interval}&start_date={start_date.strftime('%Y-%m-%d')}&end_date={end_date.strftime('%Y-%m-%d')}&apikey={API_KEY}&outputsize=5000"
                 
-                st.info(f"Fetching crypto data from Twelve Data: {converted_symbol}")
                 response = requests.get(url)
                 data = response.json()
                 
@@ -681,6 +680,61 @@ def get_asset_data(symbol, interval, days, is_crypto, retries=3):
             
             if not yf_data.empty:
                 # Create required columns
+                required_columns = ['Open', 'High', 'Low', 'Close', 'Volume']
+                for col in required_columns:
+                    if col not in yf_data.columns:
+                        yf_data[col] = yf_data['Close'] if 'Close' in yf_data.columns else 100
+                        
+                # Rename columns to lowercase
+                yf_data = yf_data.rename(columns={
+                    'Open': 'open',
+                    'High': 'high',
+                    'Low': 'low',
+                    'Close': 'close',
+                    'Volume': 'volume'
+                })
+                return yf_data[['open', 'high', 'low', 'close', 'volume']]
+        except Exception as e:
+            st.error(f"Yahoo Finance fallback failed: {str(e)}")
+        
+        return None
+    else:
+        # Stock data handling
+        for attempt in range(retries):
+            try:
+                end_date = datetime.now()
+                start_date = end_date - timedelta(days=days)
+                url = f"https://api.twelvedata.com/time_series?symbol={symbol}&interval={interval}&start_date={start_date.strftime('%Y-%m-%d')}&end_date={end_date.strftime('%Y-%m-%d')}&apikey={API_KEY}&outputsize=5000"
+                response = requests.get(url)
+                data = response.json()
+                
+                if "values" in data:
+                    df = pd.DataFrame(data["values"])
+                    df["datetime"] = pd.to_datetime(df["datetime"])
+                    df.set_index("datetime", inplace=True)
+                    df = df.astype(float).sort_index()
+                    return df
+                else:
+                    st.warning(f"Attempt {attempt+1} failed: {data.get('message', 'Unknown error')}")
+                    time.sleep(2)
+            except Exception as e:
+                st.warning(f"Attempt {attempt+1} failed: {str(e)}")
+                time.sleep(2)
+        
+        # Fallback to Yahoo Finance
+        try:
+            st.warning("Using Yahoo Finance as fallback data source")
+            interval_map = {
+                "1min": "1m", "5min": "5m", "15min": "15m", 
+                "30min": "30m", "1h": "60m", "1day": "1d"
+            }
+            yf_interval = interval_map.get(interval, "1d")
+            
+            # Get more days to ensure enough data points
+            yf_data = yf.download(symbol, period=f"{days+5}d", interval=yf_interval)
+            
+            if not yf_data.empty:
+                # Create all required columns with default values if missing
                 required_columns = ['Open', 'High', 'Low', 'Close', 'Volume']
                 for col in required_columns:
                     if col not in yf_data.columns:
