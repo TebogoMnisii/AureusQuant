@@ -27,7 +27,6 @@ import secrets
 import re
 import plotly.express as px
 from wordcloud import WordCloud
-from binance.exceptions import BinanceAPIException
 # Apply nest_asyncio for async in Streamlit
 nest_asyncio.apply()
 
