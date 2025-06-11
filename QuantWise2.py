@@ -21,7 +21,6 @@ import websockets
 import asyncio
 import nest_asyncio
 from binance.client import Client
-from binance import AsyncClient, BinanceSocketManager
 import smtplib
 from email.mime.text import MIMEText
 import secrets
